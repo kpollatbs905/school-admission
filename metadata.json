@@ -1,0 +1,7 @@
+{
+  "name": "Tha Bo School Admission System",
+  "description": "A comprehensive digital student admission system for Tha Bo School, supporting Matthayom 1 and 4 applications with GPA validation and document tracking.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
