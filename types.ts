@@ -27,12 +27,21 @@ export interface Address {
   zipCode: string;
 }
 
+export interface Scores {
+  math: number;
+  science: number;
+  english: number;
+  thai: number;
+  sum: number;
+  ave: number;
+}
+
 export interface ApplicationData {
   id: string;
   level: Level;
   status: ApplicationStatus;
   submitDate: string;
-  serviceArea: 'in' | 'out'; // ในเขต / นอกเขต
+  serviceArea: 'in' | 'out';
   title: string;
   firstName: string;
   lastName: string;
@@ -48,14 +57,14 @@ export interface ApplicationData {
   address: Address;
   
   education: {
-    studentType: 'internal' | 'external'; // ม.4: รร.เดิม / รร.อื่น, ม.1: กำลังเรียน / จบ
+    studentType: 'internal' | 'external';
     schoolName: string;
     schoolDistrict: string;
     schoolProvince: string;
     gpa: string;
-    subGpa?: string; // เกรดเฉลี่ยเฉพาะวิชา
-    subGpaSubject?: string; // ชื่อวิชาของเกรดเฉลี่ยเฉพาะ
-    m3Room?: string; // สำหรับ ม.4 รร.เดิม
+    subGpa?: string;
+    subGpaSubject?: string;
+    m3Room?: string;
   };
   
   track: string;
@@ -68,17 +77,23 @@ export interface ApplicationData {
     houseReg?: string;
     idCard?: string;
     transcript?: string;
-    transcriptBack?: string; // เพิ่มฟิลด์ใบ ปพ.1 ด้านหลัง
+    transcriptBack?: string;
     paymentSlip?: string;
     additional: { name: string; url: string; }[];
   };
   
   adminNote?: string;
   updatedAt?: string;
+
+  room?: string; // Renamed from examRoom
+  examRoom?: number;
+  assignedClass?: string;
+  scores?: Scores;
 }
 
 export interface SystemSettings {
   schoolName: string;
+  admissionYear: string;
   isOpen: boolean;
   startDate: string;
   endDate: string;
