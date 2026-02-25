@@ -13,8 +13,16 @@ const App: React.FC = () => {
   const [view, setView] = useState<'landing' | 'form' | 'success' | 'check' | 'admin'>('landing');
   const [currentLevel, setCurrentLevel] = useState<Level>(Level.M1);
   const [submittedData, setSubmittedData] = useState<ApplicationData | null>(null);
-  const [settings] = useState<SystemSettings>(StorageService.getSettings());
+  const [editData, setEditData] = useState<ApplicationData | null>(null);
+  const [settings, setSettings] = useState<SystemSettings>(StorageService.getSettings());
   const [imgError, setImgError] = useState(false);
+
+  // Refresh settings when view changes back to landing or admin
+  React.useEffect(() => {
+    if (view === 'landing' || view === 'admin') {
+      setSettings(StorageService.getSettings());
+    }
+  }, [view]);
 
   const logoUrl = "https://drive.google.com/thumbnail?id=1IjjdJpQYPGN2DlNa7QGHznqRjCu-oE1D&sz=w1000";
 
@@ -24,16 +32,18 @@ const App: React.FC = () => {
       return;
     }
     setCurrentLevel(level);
+    setEditData(null);
+    setView('form');
+  };
+
+  const handleEdit = (data: ApplicationData) => {
+    setCurrentLevel(data.level);
+    setEditData(data);
     setView('form');
   };
 
   const handleFinish = (data: ApplicationData) => {
-    try {
-      StorageService.saveApplication(data);
-    } catch (e) {
-      console.error("Local storage failed", e);
-    }
-    
+    // Local storage persistence removed to avoid QuotaExceededError
     setSubmittedData(data);
     setView('success');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -42,6 +52,7 @@ const App: React.FC = () => {
   const reset = () => {
     setView('landing');
     setSubmittedData(null);
+    setEditData(null);
   };
 
   return (
@@ -69,8 +80,8 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="space-y-2">
-                <div className="inline-block bg-yellow-400 text-blue-900 px-6 py-1.5 rounded-full text-sm font-black mb-2 shadow-sm uppercase tracking-wider">
-                  Admission System {new Date().getFullYear() + 543}
+                <div className={`inline-block px-6 py-1.5 rounded-full text-sm font-black mb-2 shadow-sm uppercase tracking-wider ${settings.isOpen ? 'bg-yellow-400 text-blue-900' : 'bg-red-500 text-white'}`}>
+                  {settings.isOpen ? `Admission System ${settings.admissionYear}` : 'Admission System Closed'}
                 </div>
                 <h1 className="text-4xl md:text-6xl font-black text-blue-900 tracking-tight">
                   {settings.schoolName}
@@ -78,11 +89,17 @@ const App: React.FC = () => {
                 <p className="text-xl md:text-2xl text-slate-500 font-medium tracking-wide">
                   ระบบรับสมัครนักเรียนผ่านสื่ออิเล็กทรอนิกส์
                 </p>
+                {!settings.isOpen && (
+                  <div className="mt-4 p-4 bg-white/50 border-2 border-red-200 text-red-600 rounded-2xl max-w-lg mx-auto font-black italic">
+                    ⚠️ ขณะนี้ระบบปิดรับสมัครออนไลน์ถาวรหรืออยู่ในช่วงปิดระบบ <br/>
+                    โปรดติดต่อโรงเรียนที่เบอร์: {settings.contactPhone}
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="grid md:grid-cols-2 gap-8 px-4">
-              <div className="group bg-white rounded-[2.5rem] shadow-xl overflow-hidden border-b-8 border-yellow-400 hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-2" 
+              <div className={`group bg-white rounded-[2.5rem] shadow-xl overflow-hidden border-b-8 border-yellow-400 transition-all cursor-pointer transform ${settings.isOpen ? 'hover:shadow-2xl hover:-translate-y-2' : 'opacity-80 grayscale'}`} 
                    onClick={() => startApplication(Level.M1)}>
                 <div className="p-10 text-center space-y-4">
                   <div className="bg-yellow-100 w-24 h-24 rounded-3xl flex items-center justify-center mx-auto group-hover:rotate-6 transition-transform shadow-inner">
@@ -93,13 +110,13 @@ const App: React.FC = () => {
                     สำหรับผู้จบการศึกษาชั้นประถมศึกษาปีที่ 6<br/>
                     ทั่วไป และในเขตพื้นที่บริการ
                   </p>
-                  <button className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black hover:bg-blue-700 shadow-xl shadow-blue-200 transition-colors mt-4">
-                    สมัครเรียน ม.1
+                  <button className={`w-full py-4 rounded-2xl font-black shadow-xl transition-colors mt-4 ${settings.isOpen ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+                    {settings.isOpen ? 'สมัครเรียน ม.1' : 'ปิดรับสมัคร'}
                   </button>
                 </div>
               </div>
 
-              <div className="group bg-white rounded-[2.5rem] shadow-xl overflow-hidden border-b-8 border-blue-600 hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-2"
+              <div className={`group bg-white rounded-[2.5rem] shadow-xl overflow-hidden border-b-8 border-blue-600 transition-all cursor-pointer transform ${settings.isOpen ? 'hover:shadow-2xl hover:-translate-y-2' : 'opacity-80 grayscale'}`}
                    onClick={() => startApplication(Level.M4)}>
                 <div className="p-10 text-center space-y-4">
                   <div className="bg-blue-100 w-24 h-24 rounded-3xl flex items-center justify-center mx-auto group-hover:-rotate-6 transition-transform shadow-inner">
@@ -110,8 +127,8 @@ const App: React.FC = () => {
                     สำหรับผู้จบการศึกษาชั้นมัธยมศึกษาปีที่ 3<br/>
                     โควตาโรงเรียนเดิม และนักเรียนทั่วไป
                   </p>
-                  <button className="w-full bg-yellow-500 text-white py-4 rounded-2xl font-black hover:bg-yellow-600 shadow-xl shadow-yellow-100 transition-colors mt-4">
-                    สมัครเรียน ม.4
+                  <button className={`w-full py-4 rounded-2xl font-black shadow-xl transition-colors mt-4 ${settings.isOpen ? 'bg-yellow-500 text-white hover:bg-yellow-600 shadow-yellow-100' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+                    {settings.isOpen ? 'สมัครเรียน ม.4' : 'ปิดรับสมัคร'}
                   </button>
                 </div>
               </div>
@@ -135,6 +152,7 @@ const App: React.FC = () => {
           <AdmissionForm 
             level={currentLevel} 
             settings={settings}
+            initialData={editData || undefined}
             onCancel={reset}
             onFinish={handleFinish}
           />
@@ -148,6 +166,7 @@ const App: React.FC = () => {
         )}
 
         {view === 'check' && (
+          // Fixed: Removed unsupported onEdit prop from StatusCheck component call
           <StatusCheck onBack={reset} />
         )}
 
@@ -159,8 +178,8 @@ const App: React.FC = () => {
       <footer className="bg-white border-t py-12 no-print">
         <div className="container mx-auto px-4 text-center space-y-4">
           <p className="text-slate-400 text-sm font-medium">
-            © {new Date().getFullYear() + 543} {settings.schoolName}<br/>
-            พัฒนาโดย ครูชมัยพร ถิ่นสำราญ โรงเรียนท่าบ่อ
+            © {settings.admissionYear} {settings.schoolName}<br/>
+            {settings.contactLine}
           </p>
         </div>
       </footer>
