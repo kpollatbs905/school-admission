@@ -4,8 +4,11 @@ import { StorageService } from '../services/storage';
 import { Level, ApplicationData } from '../types';
 
 const PublicStats: React.FC = () => {
+  const [overviewStats, setOverviewStats] = useState({ m1: { total: 0, male: 0, female: 0 }, m4: { total: 0, male: 0, female: 0 } });
   const [apps, setApps] = useState<ApplicationData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Filters
   const [filterLevel, setFilterLevel] = useState<string>('all');
@@ -13,51 +16,44 @@ const PublicStats: React.FC = () => {
   const [filterTrack, setFilterTrack] = useState<string>('all');
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchOverview = async () => {
+      setLoading(true);
+      setError(null);
       try {
         const scriptUrl = StorageService.getScriptUrl();
-        // Use standard fetch for GET, GAS handles redirects automatically
-        const url = `${scriptUrl}?action=read&t=${Date.now()}`;
-        const res = await fetch(url);
-        
-        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-        
+        const res = await fetch(`${scriptUrl}?action=getStats&t=${Date.now()}`);
         const data = await res.json();
-        if (Array.isArray(data)) {
-          setApps(data);
-          try {
-            // Sync to local as backup, but wrap in try-catch for quota issues
-            localStorage.setItem('thabo_admission_apps_v2', JSON.stringify(data));
-          } catch (storageError) {
-            console.warn("Could not sync stats to local storage: Quota exceeded");
-          }
-        } else {
-          throw new Error("Invalid data format from cloud");
-        }
+        setOverviewStats(data);
       } catch (err) {
-        console.error("Public stats fetch failed:", err);
-        // Fallback to local data
-        setApps(StorageService.getApplications());
+        console.error("Overview stats fetch failed:", err);
+        setError("ไม่สามารถเชื่อมต่อฐานข้อมูลได้");
       } finally {
         setLoading(false);
       }
     };
     
-    fetchData();
+    fetchOverview();
   }, []);
 
-  const overviewStats = useMemo(() => {
-    const m1 = apps.filter(a => a.level === Level.M1);
-    const m4 = apps.filter(a => a.level === Level.M4);
-    
-    const count = (list: any[]) => ({
-      total: list.length,
-      male: list.filter(a => ['เด็กชาย', 'นาย'].includes(a.title)).length,
-      female: list.filter(a => ['เด็กหญิง', 'นางสาว'].includes(a.title)).length
-    });
+  // Fetch full data only when user interacts with filters or after initial load
+  useEffect(() => {
+    const fetchDetails = async () => {
+      if (apps.length > 0) return;
+      setLoadingDetails(true);
+      try {
+        const data = await StorageService.getApplications();
+        setApps(data);
+      } catch (err) {
+        console.error("Detail stats fetch failed:", err);
+      } finally {
+        setLoadingDetails(false);
+      }
+    };
 
-    return { m1: count(m1), m4: count(m4) };
-  }, [apps]);
+    // Delay fetching full data to prioritize initial page load
+    const timer = setTimeout(fetchDetails, 2000);
+    return () => clearTimeout(timer);
+  }, [apps.length]);
 
   const filteredApps = useMemo(() => {
     return apps.filter(app => {
@@ -132,6 +128,11 @@ const PublicStats: React.FC = () => {
             <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
             <p className="text-slate-400 font-bold">กำลังโหลดข้อมูลล่าสุด...</p>
           </div>
+        ) : error ? (
+          <div className="bg-yellow-50 border-2 border-yellow-200 p-6 rounded-3xl text-center">
+             <p className="text-yellow-700 font-bold">{error}</p>
+             <button onClick={() => window.location.reload()} className="mt-4 text-xs bg-yellow-200 text-yellow-800 px-4 py-2 rounded-xl font-black">ลองใหม่</button>
+          </div>
         ) : (
           <div className="flex flex-col md:flex-row gap-8">
             <StatCard 
@@ -150,7 +151,7 @@ const PublicStats: React.FC = () => {
         )}
       </div>
 
-      {!loading && (
+      {!loading && !error && (
         <div className="bg-white rounded-[2.5rem] p-8 shadow-xl border border-slate-100">
            <h3 className="text-lg font-black text-slate-700 mb-6 flex items-center">
               เจาะลึกสถิติรายแผนการเรียน
@@ -182,7 +183,13 @@ const PublicStats: React.FC = () => {
               </div>
            </div>
 
-           <div className="bg-slate-900 rounded-3xl p-6 text-white flex flex-col md:flex-row items-center justify-between shadow-lg">
+           <div className="bg-slate-900 rounded-3xl p-6 text-white flex flex-col md:flex-row items-center justify-between shadow-lg relative overflow-hidden">
+              {loadingDetails && (
+                <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[1px] flex items-center justify-center z-10">
+                   <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mr-2"></div>
+                   <span className="text-[10px] font-bold uppercase tracking-widest">กำลังโหลดข้อมูลเชิงลึก...</span>
+                </div>
+              )}
               <div className="flex items-center space-x-4 mb-6 md:mb-0 text-left">
                  <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center">
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
