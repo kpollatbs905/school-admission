@@ -1,202 +1,224 @@
 
-import React, { useState } from 'react';
-import { ApplicationData, ApplicationStatus } from '../types';
+import React, { useEffect, useState, useMemo } from 'react';
 import { StorageService } from '../services/storage';
+import { Level, ApplicationData } from '../types';
 
-interface Props {
-  onBack: () => void;
-}
+const PublicStats: React.FC = () => {
+  const [overviewStats, setOverviewStats] = useState({ m1: { total: 0, male: 0, female: 0 }, m4: { total: 0, male: 0, female: 0 } });
+  const [apps, setApps] = useState<ApplicationData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-const StatusCheck: React.FC<Props> = ({ onBack }) => {
-  const [id, setId] = useState('');
-  const [result, setResult] = useState<ApplicationData | null>(null);
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  // Filters
+  const [filterLevel, setFilterLevel] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
+  const [filterTrack, setFilterTrack] = useState<string>('all');
 
-  const handleSearch = async () => {
-    if (id.length < 13) {
-      setError('กรุณากรอกเลขบัตรประชาชนให้ครบ 13 หลัก');
-      return;
-    }
-
-    setError('');
-    setIsLoading(true);
-    setResult(null);
-
-    try {
-      // 1. ดึงข้อมูลล่าสุดจาก Google Sheet โดยตรง
-      const scriptUrl = StorageService.getScriptUrl();
-      const url = `${scriptUrl}?action=read&t=${Date.now()}`;
-      const res = await fetch(url);
-      
-      if (!res.ok) throw new Error("ไม่สามารถเชื่อมต่อฐานข้อมูลโรงเรียนได้");
-      
-      const allApps: any[] = await res.json();
-      
-      // 2. ค้นหาข้อมูลผู้สมัครจากเลขบัตรประชาชน (ลบขีดออกก่อนเทียบ)
-      const cleanInput = id.replace(/-/g, '');
-      const found = allApps.find(a => String(a.nationalId).replace(/-/g, '').replace(/'/g, '') === cleanInput);
-
-      if (found) {
-        setResult(found);
-        // บันทึกเก็บไว้ในเครื่องเป็นสำรองด้วย
-        StorageService.saveApplication(found);
-      } else {
-        // ลองหาในเครื่องเผื่อเน็ตหลุด
-        const localApps = StorageService.getApplications();
-        const localFound = localApps.find(a => a.nationalId.replace(/-/g, '') === cleanInput);
-        if (localFound) {
-          setResult(localFound);
-        } else {
-          setError('ไม่พบข้อมูลการสมัครในระบบ โปรดตรวจสอบเลขบัตรประชาชนอีกครั้ง');
-        }
+  useEffect(() => {
+    const fetchOverview = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const scriptUrl = StorageService.getScriptUrl();
+        const res = await fetch(`${scriptUrl}?action=getStats&t=${Date.now()}`);
+        const data = await res.json();
+        setOverviewStats(data);
+      } catch (err) {
+        console.error("Overview stats fetch failed:", err);
+        setError("ไม่สามารถเชื่อมต่อฐานข้อมูลได้");
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      console.error("Status check failed:", err);
-      // Fallback: หากดึงจาก Cloud ไม่ได้ ให้หาในเครื่อง
-      const cleanInput = id.replace(/-/g, '');
-      const localApps = StorageService.getApplications();
-      const localFound = localApps.find(a => a.nationalId.replace(/-/g, '') === cleanInput);
-      
-      if (localFound) {
-        setResult(localFound);
-      } else {
-        setError('ไม่สามารถเชื่อมต่อระบบออนไลน์ได้ในขณะนี้ และไม่พบข้อมูลในเครื่องนี้');
+    };
+    
+    fetchOverview();
+  }, []);
+
+  // Fetch full data only when user interacts with filters or after initial load
+  useEffect(() => {
+    const fetchDetails = async () => {
+      if (apps.length > 0) return;
+      setLoadingDetails(true);
+      try {
+        const data = await StorageService.getApplications();
+        setApps(data);
+      } catch (err) {
+        console.error("Detail stats fetch failed:", err);
+      } finally {
+        setLoadingDetails(false);
       }
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    };
 
-  const isDocAttached = (field?: string) => field && (field.startsWith('data:image') || field.startsWith('http') || field === 'UPLOADED');
+    // Delay fetching full data to prioritize initial page load
+    const timer = setTimeout(fetchDetails, 2000);
+    return () => clearTimeout(timer);
+  }, [apps.length]);
 
-  return (
-    <div className="max-w-2xl mx-auto animate-slide-up">
-      <div className="bg-white shadow-2xl rounded-[3rem] overflow-hidden no-print text-left border">
-        <div className="p-10 text-center bg-blue-900 text-white relative">
-          <div className="absolute top-0 right-0 p-4 opacity-10">
-             <svg className="w-20 h-20" fill="currentColor" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-          </div>
-          <h2 className="text-3xl font-black italic tracking-tight">ตรวจสอบสถานะการสมัคร</h2>
-          <p className="opacity-70 font-medium">ระบุเลขประจำตัวประชาชน 13 หลักของผู้สมัคร</p>
+  const filteredApps = useMemo(() => {
+    return apps.filter(app => {
+      if (filterLevel !== 'all' && app.level !== filterLevel) return false;
+      if (filterType !== 'all' && app.trackType !== filterType) return false;
+      if (filterTrack !== 'all' && app.track !== filterTrack) return false;
+      return true;
+    });
+  }, [apps, filterLevel, filterType, filterTrack]);
+
+  const filteredStats = useMemo(() => {
+    const male = filteredApps.filter(a => ['เด็กชาย', 'นาย'].includes(a.title)).length;
+    const female = filteredApps.filter(a => ['เด็กหญิง', 'นางสาว'].includes(a.title)).length;
+    return { total: filteredApps.length, male, female };
+  }, [filteredApps]);
+
+  const availableTracks = useMemo(() => {
+    let source = apps;
+    if (filterLevel !== 'all') source = source.filter(a => a.level === filterLevel);
+    if (filterType !== 'all') source = source.filter(a => a.trackType === filterType);
+    return Array.from(new Set(source.map(a => a.track))).filter(Boolean).sort();
+  }, [apps, filterLevel, filterType]);
+
+  const StatCard = ({ title, data, colorClass, icon }: any) => (
+    <div className="bg-white rounded-[2rem] shadow-xl border border-slate-100 p-6 flex-1 hover:shadow-2xl transition-all">
+      <div className="flex items-center space-x-4 mb-6">
+        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-white shadow-lg ${colorClass}`}>
+          {icon}
         </div>
-        
-        <div className="p-10 space-y-8">
-          <div className="flex flex-col md:flex-row gap-3">
-            <input 
-              type="text" 
-              maxLength={13} 
-              value={id} 
-              onChange={e => setId(e.target.value.replace(/\D/g, ''))} 
-              placeholder="เลขบัตรประชาชน 13 หลัก"
-              className="flex-1 p-5 border-2 border-slate-100 rounded-2xl focus:border-blue-500 outline-none font-black text-2xl tracking-widest text-blue-900 placeholder:text-slate-200"
-            />
-            <button 
-              onClick={handleSearch} 
-              disabled={isLoading}
-              className={`bg-blue-600 text-white px-10 py-5 rounded-2xl font-black text-lg active:scale-95 transition-all shadow-xl shadow-blue-100 hover:bg-blue-700 flex items-center justify-center space-x-2 ${isLoading ? 'opacity-50' : ''}`}
-            >
-              {isLoading ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>กำลังค้นหา...</span>
-                </>
-              ) : (
-                <span>ค้นหาข้อมูล</span>
-              )}
-            </button>
-          </div>
-
-          {error && (
-            <div className="bg-red-50 border-2 border-red-100 p-6 rounded-2xl flex items-center space-x-4 animate-shake">
-               <div className="w-10 h-10 bg-red-500 text-white rounded-full flex items-center justify-center flex-shrink-0 shadow-lg">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12"/></svg>
-               </div>
-               <p className="text-red-600 font-black">{error}</p>
-            </div>
-          )}
-
-          {result && (
-            <div className="bg-slate-50 p-8 rounded-[2.5rem] space-y-8 border-2 border-slate-100 animate-slide-up shadow-inner relative overflow-hidden group">
-               <div className="absolute top-0 right-0 p-10 opacity-5 pointer-events-none group-hover:scale-110 transition-transform duration-1000">
-                  <svg className="w-32 h-32" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-               </div>
-               
-               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                 <div>
-                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-1">สถานะปัจจุบันของคุณ</p>
-                    <div className={`px-6 py-2 rounded-full inline-flex items-center space-x-2 shadow-sm ${
-                      result.status === ApplicationStatus.APPROVED ? 'bg-green-500 text-white' :
-                      result.status === ApplicationStatus.REJECTED ? 'bg-red-500 text-white' : 'bg-yellow-400 text-yellow-900'
-                    }`}>
-                      <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
-                      <span className="text-xl font-black italic">{result.status}</span>
-                    </div>
-                 </div>
-                 <div className="text-left md:text-right">
-                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-1">รหัสอ้างอิงใบสมัคร</p>
-                    <p className="text-3xl font-black text-blue-900 tracking-tighter">{result.id}</p>
-                 </div>
-               </div>
-
-               <div className="border-t border-slate-200 pt-8 space-y-2">
-                 <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">ข้อมูลผู้สมัคร</p>
-                 <p className="text-2xl font-black text-slate-800">{result.title}{result.firstName} {result.lastName}</p>
-                 <p className="text-sm font-bold text-slate-500 bg-white inline-block px-4 py-1 rounded-full border">ระดับชั้น: มัธยมศึกษาปีที่ {result.level}</p>
-                 
-                 <div className="mt-8">
-                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-3">การตรวจสอบเอกสารเบื้องต้น</p>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        {[
-                          { l: 'รูปถ่าย', f: 'photo' },
-                          { l: 'ทะเบียนบ้าน', f: 'houseReg' },
-                          { l: 'บัตรประชาชน', f: 'idCard' },
-                          { l: 'ปพ.1 (หน้า)', f: 'transcript' },
-                          { l: 'ปพ.1 (หลัง)', f: 'transcriptBack' }
-                        ].map(d => (
-                          <div key={d.f} className="flex items-center space-x-2 bg-white p-3 rounded-xl border border-slate-100">
-                            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ${isDocAttached((result.files as any)[d.f]) ? 'bg-green-500 text-white' : 'bg-slate-200 text-slate-400'}`}>
-                              {isDocAttached((result.files as any)[d.f]) ? '✓' : '!'}
-                            </div>
-                            <span className="text-[11px] font-bold text-slate-600 truncate">{d.l}</span>
-                          </div>
-                        ))}
-                    </div>
-                 </div>
-               </div>
-
-               {result.status === ApplicationStatus.REJECTED && (
-                 <div className="bg-white p-8 rounded-[2rem] text-red-700 border-2 border-red-100 shadow-xl animate-bounce-short">
-                   <div className="flex items-center space-x-2 mb-3">
-                      <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                      <h4 className="font-black uppercase text-sm tracking-widest">ข้อความจากเจ้าหน้าที่:</h4>
-                   </div>
-                   <p className="font-bold text-lg leading-relaxed italic">"{result.adminNote || 'เอกสารไม่ถูกต้อง หรือข้อมูลไม่ครบถ้วน กรุณาติดต่อฝ่ายรับสมัครโรงเรียนท่าบ่อเพื่อแก้ไขข้อมูล'}"</p>
-                 </div>
-               )}
-
-               {result.status === ApplicationStatus.APPROVED && (
-                 <div className="bg-green-600 p-6 rounded-2xl text-white shadow-lg text-center font-black animate-pulse">
-                    ยินดีด้วย! ใบสมัครของคุณได้รับการอนุมัติแล้ว
-                 </div>
-               )}
-            </div>
-          )}
+        <div>
+          <h3 className="text-xl font-black text-slate-800">{title}</h3>
+          <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">ยอดผู้สมัครทั้งหมด</p>
         </div>
-
-        <div className="p-8 border-t text-center bg-slate-50/50">
-           <button onClick={onBack} className="text-slate-400 font-black hover:text-blue-600 transition-all flex items-center justify-center space-x-2 mx-auto">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-              <span>กลับสู่หน้าหลัก</span>
-           </button>
+        <div className="flex-grow text-right">
+           <span className={`text-4xl font-black ${colorClass.replace('bg-', 'text-')}`}>{data.total}</span>
         </div>
       </div>
       
-      <p className="mt-8 text-slate-400 text-xs font-bold italic">
-         * หากข้อมูลไม่ถูกต้องหรือมีข้อสงสัย โปรดติดต่อฝ่ายรับสมัคร โรงเรียนท่าบ่อ ในวันและเวลาราชการ
-      </p>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-slate-50 rounded-xl p-3 flex items-center space-x-3 border border-slate-100">
+           <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+             <span className="text-xs">M</span>
+           </div>
+           <div>
+             <p className="text-[10px] font-bold text-slate-400 uppercase">ชาย</p>
+             <p className="text-xl font-black text-slate-700">{data.male}</p>
+           </div>
+        </div>
+        <div className="bg-slate-50 rounded-xl p-3 flex items-center space-x-3 border border-slate-100">
+           <div className="w-8 h-8 rounded-full bg-pink-100 text-pink-500 flex items-center justify-center">
+             <span className="text-xs">F</span>
+           </div>
+           <div>
+             <p className="text-[10px] font-bold text-slate-400 uppercase">หญิง</p>
+             <p className="text-xl font-black text-slate-700">{data.female}</p>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 mt-12 animate-slide-up space-y-8">
+      <div>
+        <div className="flex items-center space-x-2 mb-6 justify-center">
+           <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+           <h2 className="text-xl font-black text-slate-400 uppercase tracking-widest text-center">สถิติการรับสมัครล่าสุด</h2>
+        </div>
+        
+        {loading ? (
+          <div className="text-center py-10">
+            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+            <p className="text-slate-400 font-bold">กำลังโหลดข้อมูลล่าสุด...</p>
+          </div>
+        ) : error ? (
+          <div className="bg-yellow-50 border-2 border-yellow-200 p-6 rounded-3xl text-center">
+             <p className="text-yellow-700 font-bold">{error}</p>
+             <button onClick={() => window.location.reload()} className="mt-4 text-xs bg-yellow-200 text-yellow-800 px-4 py-2 rounded-xl font-black">ลองใหม่</button>
+          </div>
+        ) : (
+          <div className="flex flex-col md:flex-row gap-8">
+            <StatCard 
+              title="ระดับชั้น ม.1" 
+              data={overviewStats.m1} 
+              colorClass="bg-blue-600" 
+              icon={<span className="text-2xl font-black">1</span>}
+            />
+            <StatCard 
+              title="ระดับชั้น ม.4" 
+              data={overviewStats.m4} 
+              colorClass="bg-yellow-500" 
+              icon={<span className="text-2xl font-black">4</span>}
+            />
+          </div>
+        )}
+      </div>
+
+      {!loading && !error && (
+        <div className="bg-white rounded-[2.5rem] p-8 shadow-xl border border-slate-100">
+           <h3 className="text-lg font-black text-slate-700 mb-6 flex items-center">
+              เจาะลึกสถิติรายแผนการเรียน
+           </h3>
+
+           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 mb-8">
+              <div className="md:col-span-3">
+                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">ระดับชั้น</label>
+                 <select value={filterLevel} onChange={e => { setFilterLevel(e.target.value); setFilterTrack('all'); }} className="w-full p-3 rounded-xl bg-slate-50 border-2 font-bold outline-none">
+                    <option value="all">ทั้งหมด</option>
+                    <option value={Level.M1}>ม.1</option>
+                    <option value={Level.M4}>ม.4</option>
+                 </select>
+              </div>
+              <div className="md:col-span-3">
+                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">ประเภทห้องเรียน</label>
+                 <select value={filterType} onChange={e => { setFilterType(e.target.value); setFilterTrack('all'); }} className="w-full p-3 rounded-xl bg-slate-50 border-2 font-bold outline-none">
+                    <option value="all">ทั้งหมด</option>
+                    <option value="special">ห้องเรียนพิเศษ</option>
+                    <option value="regular">ห้องเรียนปกติ</option>
+                 </select>
+              </div>
+              <div className="md:col-span-6">
+                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">แผนการเรียน</label>
+                 <select value={filterTrack} onChange={e => setFilterTrack(e.target.value)} className="w-full p-3 rounded-xl bg-slate-50 border-2 font-bold outline-none">
+                    <option value="all">ทุกแผนการเรียน</option>
+                    {availableTracks.map((t, i) => <option key={i} value={t}>{t}</option>)}
+                 </select>
+              </div>
+           </div>
+
+           <div className="bg-slate-900 rounded-3xl p-6 text-white flex flex-col md:flex-row items-center justify-between shadow-lg relative overflow-hidden">
+              {loadingDetails && (
+                <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[1px] flex items-center justify-center z-10">
+                   <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mr-2"></div>
+                   <span className="text-[10px] font-bold uppercase tracking-widest">กำลังโหลดข้อมูลเชิงลึก...</span>
+                </div>
+              )}
+              <div className="flex items-center space-x-4 mb-6 md:mb-0 text-left">
+                 <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                 </div>
+                 <div>
+                    <p className="font-bold opacity-60 text-sm">ยอดผู้สมัครตามเงื่อนไข</p>
+                    <p className="font-black text-lg">{filterLevel === 'all' ? 'ทุกระดับชั้น' : filterLevel}</p>
+                 </div>
+              </div>
+              
+              <div className="flex w-full md:w-auto justify-around md:justify-end md:space-x-8">
+                 <div className="text-center">
+                    <p className="text-[10px] uppercase font-bold text-blue-300">ชาย</p>
+                    <p className="text-2xl font-black">{filteredStats.male}</p>
+                 </div>
+                 <div className="text-center">
+                    <p className="text-[10px] uppercase font-bold text-pink-300">หญิง</p>
+                    <p className="text-2xl font-black">{filteredStats.female}</p>
+                 </div>
+                 <div className="text-center pl-8 border-l border-white/20">
+                    <p className="text-[10px] uppercase font-bold text-green-300">รวม</p>
+                    <p className="text-4xl font-black text-green-400">{filteredStats.total}</p>
+                 </div>
+              </div>
+           </div>
+        </div>
+      )}
     </div>
   );
 };
 
-export default StatusCheck;
+export default PublicStats;
