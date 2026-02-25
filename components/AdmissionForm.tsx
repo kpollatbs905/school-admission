@@ -7,22 +7,23 @@ import { StorageService } from '../services/storage';
 interface Props {
   level: Level;
   settings: SystemSettings;
+  initialData?: ApplicationData;
   onCancel: () => void;
   onFinish: (data: ApplicationData) => void;
 }
 
-const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish }) => {
+const AdmissionForm: React.FC<Props> = ({ level, settings, initialData, onCancel, onFinish }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [existingNationalIds, setExistingNationalIds] = useState<Set<string>>(new Set());
+  const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
   
-  const [formData, setFormData] = useState<Partial<ApplicationData>>({
+  const [formData, setFormData] = useState<Partial<ApplicationData>>(initialData || {
     id: StorageService.getNextId(level),
     level,
     status: ApplicationStatus.PENDING,
     submitDate: new Date().toISOString(),
-    serviceArea: 'in',
+    serviceArea: 'in', 
     title: level === Level.M1 ? 'เด็กชาย' : 'นาย',
     firstName: '',
     lastName: '',
@@ -45,7 +46,7 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
       m3Room: ''
     },
     track: '',
-    trackType: 'regular', // Default
+    trackType: 'regular',
     talents: '',
     specialNeeds: '',
     files: { additional: [] }
@@ -53,6 +54,18 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
 
   const [addressSuggestions, setAddressSuggestions] = useState<any[]>([]);
   const [previews, setPreviews] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (initialData?.files) {
+      const p: Record<string, string> = {};
+      Object.entries(initialData.files).forEach(([k, v]) => {
+        if (typeof v === 'string' && (v.startsWith('data:') || v.startsWith('http'))) {
+          p[k] = v;
+        }
+      });
+      setPreviews(p);
+    }
+  }, [initialData]);
 
   const M1_TRACKS = {
     special: [
@@ -84,28 +97,7 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
 
   const currentTracks = level === Level.M1 ? M1_TRACKS : M4_TRACKS;
 
-  useEffect(() => {
-    // โหลดข้อมูลเก่าจากเครื่อง
-    const localApps = StorageService.getApplications();
-    const ids = new Set(localApps.map(a => a.nationalId));
-
-    // โหลดข้อมูลจาก Google Sheet เพื่อตรวจสอบการสมัครซ้ำข้ามเครื่อง
-    fetch("https://script.google.com/macros/s/AKfycbx3bxxSypIGOs76_JeNIiKm6iORFY6CPeox1GS5HyI_2M92w1b1RoeT1daepnYLlF5Syg/exec?action=read")
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          data.forEach((app: any) => {
-             // ลบขีดออกเพื่อเทียบเลขล้วนๆ
-             if (app.nationalId) ids.add(app.nationalId.replace(/-/g, ''));
-          });
-        }
-        setExistingNationalIds(ids);
-      })
-      .catch(err => console.error("Could not fetch existing apps for duplicate check", err));
-      
-    // ใส่ข้อมูล Local ไว้ก่อนระหว่างรอ Network
-    setExistingNationalIds(ids);
-  }, []);
+  // Removed heavy pre-fetch of all IDs to improve loading speed
 
   useEffect(() => {
     if (formData.birthDate) {
@@ -138,8 +130,8 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>, field: string) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        setValidationError("ไฟล์มีขนาดใหญ่เกินไป (จำกัด 2MB ต่อไฟล์)");
+      if (file.size > 2.5 * 1024 * 1024) {
+        alert("ไฟล์มีขนาดใหญ่เกินไป (จำกัด 2.5MB ต่อไฟล์) กรุณาย่อขนาดไฟล์ภาพ");
         return;
       }
       const reader = new FileReader();
@@ -155,91 +147,60 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
     }
   };
 
-  const handleTrackTypeChange = (type: 'special' | 'regular') => {
-    setFormData(prev => ({
-      ...prev,
-      trackType: type,
-      track: '', // Reset track selection when type changes
-      education: {
-        ...prev.education!,
-        subGpaSubject: ''
-      }
-    }));
-  };
-
-  const handleTrackChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selectedTrackName = e.target.value;
-    const trackObj = [...currentTracks.special, ...currentTracks.regular].find(t => t.name === selectedTrackName);
-    
-    setFormData(prev => ({
-      ...prev,
-      track: selectedTrackName,
-      education: {
-        ...prev.education!,
-        subGpaSubject: trackObj?.subGpaLabel || ''
-      }
-    }));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError(null);
 
-    // Basic Validation
     if (!validateThaiID(formData.nationalId || '')) {
-      setValidationError("เลขประจำตัวประชาชนไม่ถูกต้อง (ต้องเป็นตัวเลข 13 หลัก)");
+      setValidationError("เลขประจำตัวประชาชนไม่ถูกต้อง");
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
-    // Check for Duplicate Application
-    const currentId = formData.nationalId?.replace(/-/g, '');
-    let isDuplicate = false;
+    const currentId = formData.nationalId?.replace(/\D/g, '');
+    if (!initialData && currentId) {
+      try {
+        setIsCheckingDuplicate(true);
+        const scriptUrl = StorageService.getScriptUrl();
+        const checkRes = await fetch(`${scriptUrl}?action=checkDuplicate&id=${currentId}&t=${Date.now()}`);
+        const checkResult = await checkRes.json();
+        
+        if (checkResult.exists) {
+          setValidationError("ท่านได้ทำการสมัครเรียบร้อยแล้ว ไม่สามารถสมัครซ้ำได้ หากต้องการแก้ไขข้อมูลกรุณาติดต่อเจ้าหน้าที่");
+          setIsCheckingDuplicate(false);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+        }
+      } catch (err) {
+        console.error("Duplicate check failed:", err);
+        // If check fails, we might want to proceed or show error. 
+        // Proceeding is riskier for duplicates but better for UX if script is slow.
+      } finally {
+        setIsCheckingDuplicate(false);
+      }
+    }
     
-    // ตรวจสอบทั้งจากใน Set ที่โหลดมา และเช็ค Local Storage สดๆ อีกรอบกันพลาด
-    if (currentId) {
-      if (existingNationalIds.has(currentId)) isDuplicate = true;
-      const freshLocalApps = StorageService.getApplications();
-      if (freshLocalApps.some(app => app.nationalId.replace(/-/g, '') === currentId)) isDuplicate = true;
-    }
-
-    if (isDuplicate) {
-      setValidationError("ท่านได้ทำการสมัครเรียบร้อยแล้ว ไม่สามารถสมัครซ้ำได้ หากต้องการตรวจสอบสถานะกรุณาไปที่เมนู 'ตรวจสอบสถานะ'");
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-    
-    if (!formData.files?.photo) {
-      setValidationError("กรุณาอัปโหลดรูปถ่ายหน้าตรงของผู้สมัคร");
-      return;
-    }
-
-    if (!formData.track) {
-      setValidationError("กรุณาเลือกแผนการเรียนที่ต้องการสมัคร");
+    if (!formData.files?.photo && !initialData) {
+      setValidationError("กรุณาอัปโหลดรูปถ่าย");
       return;
     }
 
     try {
       setIsSubmitting(true);
+      const result = await StorageService.submitToCloud(formData as ApplicationData);
       
-      // 1. บันทึกลง Local Storage ก่อนเพื่อเป็นข้อมูลสำรอง
-      StorageService.saveApplication(formData as ApplicationData);
-      
-      // 2. ส่งข้อมูลไปยัง Google Cloud (Google Sheet + Drive)
-      const cloudResult = await StorageService.submitToCloud(formData as ApplicationData);
-      
-      if (cloudResult.success) {
+      if (result.success) {
         setIsSubmitting(false);
         setShowSuccessMessage(true);
         setTimeout(() => {
           onFinish(formData as ApplicationData);
         }, 2000);
       } else {
-        throw new Error(cloudResult.message || "ไม่สามารถบันทึกลง Google Sheet ได้");
+        throw new Error(result.message || "เกิดข้อผิดพลาดในการบันทึก");
       }
     } catch (err: any) {
       setIsSubmitting(false);
-      setValidationError(err.message || "เกิดข้อผิดพลาดในการส่งข้อมูล");
+      setValidationError(err.message || "การส่งข้อมูลล้มเหลว กรุณาลองใหม่อีกครั้ง");
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
@@ -249,18 +210,28 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
       <span className="text-[10px] font-black text-slate-400 block mb-2 uppercase group-hover:text-blue-500 transition-colors">{label}</span>
       <input type="file" accept="image/*" onChange={e => handleFile(e, field)} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
       <div className={`h-8 flex items-center justify-center text-xs font-bold ${previews[field] ? 'text-green-600' : 'text-blue-600'}`}>
-        {previews[field] ? '✓ เรียบร้อย' : '+ เลือกไฟล์'}
+        {previews[field] ? '✓ พร้อมอัปโหลด' : '+ เลือกไฟล์'}
       </div>
     </div>
   );
 
   return (
     <div className="max-w-4xl mx-auto pb-20">
-      {isSubmitting && (
-        <div className="fixed inset-0 bg-white/90 backdrop-blur-md z-[100] flex flex-col items-center justify-center animate-fade-in text-center p-6">
-           <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-           <p className="font-black text-blue-900 text-xl">กำลังส่งข้อมูลไปยัง Google Sheet...</p>
-           <p className="text-slate-500 text-sm mt-3 font-medium">ระบบกำลังอัปโหลดรูปภาพและบันทึกข้อมูล<br/>กรุณารอสักครู่ (อาจใช้เวลา 10-20 วินาที)</p>
+      {(isSubmitting || isCheckingDuplicate) && (
+        <div className="fixed inset-0 bg-white/95 backdrop-blur-md z-[100] flex flex-col items-center justify-center text-center p-6 animate-fade-in">
+           <div className="relative mb-8">
+             <div className="w-24 h-24 border-8 border-slate-100 rounded-full"></div>
+             <div className="w-24 h-24 border-8 border-blue-600 border-t-transparent rounded-full animate-spin absolute top-0"></div>
+             <div className="absolute inset-0 flex items-center justify-center text-blue-600 font-black">TBS</div>
+           </div>
+           <p className="font-black text-blue-900 text-3xl italic mb-2">{isCheckingDuplicate ? 'กำลังตรวจสอบข้อมูล...' : 'กำลังอัปโหลดไฟล์...'}</p>
+           <p className="text-slate-500 font-bold mb-4 text-lg">{isCheckingDuplicate ? 'โปรดรอสักครู่ ระบบกำลังตรวจสอบเลขบัตรประชาชน' : 'โปรดอย่าปิดหน้าจอนี้ จนกว่าจะบันทึกสำเร็จ'}</p>
+           <div className="w-64 h-2 bg-slate-100 rounded-full overflow-hidden">
+              <div className="h-full bg-blue-600 animate-[progress_4s_infinite]"></div>
+           </div>
+           <style>{`
+             @keyframes progress { 0% { width: 0%; transform: translateX(-100%); } 100% { width: 100%; transform: translateX(100%); } }
+           `}</style>
         </div>
       )}
 
@@ -271,15 +242,14 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M5 13l4 4L19 7" />
               </svg>
            </div>
-           <h2 className="text-5xl font-black text-slate-900 tracking-tight mb-4">ส่งใบสมัครสำเร็จ!</h2>
-           <p className="text-slate-500 text-xl font-bold">ข้อมูลถูกบันทึกลงฐานข้อมูลโรงเรียนเรียบร้อยแล้ว</p>
-           <p className="text-blue-500 mt-4 font-medium animate-pulse">กำลังพาคุณไปดูใบสมัครฉบับเต็ม...</p>
+           <h2 className="text-5xl font-black text-slate-900 tracking-tight mb-4">บันทึกข้อมูลสำเร็จ!</h2>
+           <p className="text-slate-500 text-xl font-bold italic">ระบบตรวจสอบไฟล์แนบเรียบร้อยแล้ว</p>
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-8 animate-slide-up">
         {validationError && (
-          <div className="bg-red-50 border-2 border-red-200 text-red-600 p-6 rounded-[2rem] flex items-center space-x-4 animate-shake shadow-lg shadow-red-50">
+          <div className="bg-red-50 border-2 border-red-200 text-red-600 p-6 rounded-[2rem] flex items-center space-x-4 shadow-lg">
              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0">
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
              </div>
@@ -289,25 +259,11 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
 
         <div className={`p-10 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden ${level === Level.M1 ? 'bg-blue-600' : 'bg-orange-600'}`}>
           <div className="relative z-10">
-            <h2 className="text-3xl font-black italic">ใบสมัครเข้าเรียน ชั้นมัธยมศึกษาปีที่ {level}</h2>
-            <p className="opacity-80 font-bold">โรงเรียนท่าบ่อ จังหวัดหนองคาย ปีการศึกษา {new Date().getFullYear() + 543}</p>
+            <h2 className="text-3xl font-black italic">{initialData ? 'แก้ไขใบสมัคร' : 'ใบสมัครเข้าเรียน'} ชั้นมัธยมศึกษาปีที่ {level}</h2>
+            <p className="opacity-80 font-bold">โรงเรียนท่าบ่อ จังหวัดหนองคาย ปีการศึกษา {settings.admissionYear}</p>
           </div>
         </div>
 
-        <div className="bg-white p-8 rounded-[2rem] shadow-sm border space-y-4">
-           <div className="flex flex-wrap gap-4">
-              <label className={`flex-1 p-4 border-2 rounded-2xl cursor-pointer transition-all flex items-center space-x-3 ${formData.serviceArea === 'in' ? 'border-blue-600 bg-blue-50' : 'border-slate-100'}`}>
-                 <input type="radio" checked={formData.serviceArea === 'in'} onChange={() => setFormData({...formData, serviceArea: 'in'})} />
-                 <span className="font-black text-sm">นักเรียนในเขตพื้นที่บริการ</span>
-              </label>
-              <label className={`flex-1 p-4 border-2 rounded-2xl cursor-pointer transition-all flex items-center space-x-3 ${formData.serviceArea === 'out' ? 'border-blue-600 bg-blue-50' : 'border-slate-100'}`}>
-                 <input type="radio" checked={formData.serviceArea === 'out'} onChange={() => setFormData({...formData, serviceArea: 'out'})} />
-                 <span className="font-black text-sm">นักเรียนนอกเขตพื้นที่บริการ</span>
-              </label>
-           </div>
-        </div>
-
-        {/* Section 1: Personal Info */}
         <div className="bg-white p-8 rounded-[2rem] shadow-sm border space-y-6">
           <h3 className="text-lg font-black text-blue-900 border-b pb-2 flex items-center">
             <span className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center mr-3 text-sm italic">1</span>
@@ -317,7 +273,7 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <div className="md:col-span-1">
                <div className={`aspect-[3/4] bg-slate-50 border-2 border-dashed rounded-2xl flex items-center justify-center overflow-hidden relative shadow-inner transition-all ${previews.photo ? 'border-green-400' : 'border-slate-200'}`}>
-                  {previews.photo ? <img src={previews.photo} className="w-full h-full object-cover" /> : <div className="text-center p-4"><div className="w-10 h-10 bg-slate-200 rounded-full mx-auto mb-2 flex items-center justify-center"><svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"/></svg></div><span className="text-[10px] text-slate-400 font-bold uppercase italic">ติดรูปถ่าย 1.5 นิ้ว</span></div>}
+                  {previews.photo ? <img src={previews.photo} className="w-full h-full object-cover" loading="lazy" /> : <div className="text-center p-4"><div className="w-10 h-10 bg-slate-200 rounded-full mx-auto mb-2 flex items-center justify-center"><svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"/></svg></div><span className="text-[10px] text-slate-400 font-bold uppercase italic">ติดรูปถ่าย 1.5 นิ้ว</span></div>}
                   <input type="file" accept="image/*" onChange={e => handleFile(e, 'photo')} className="absolute inset-0 opacity-0 cursor-pointer" />
                </div>
             </div>
@@ -328,7 +284,7 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
                     <input required maxLength={13} value={formData.nationalId} onChange={e => setFormData({...formData, nationalId: e.target.value})} className="w-full p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-black text-lg" placeholder="ใส่เฉพาะตัวเลข" />
                   </div>
                   <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase">วัน/เดือน/ปีเกิด (พ.ศ.)</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase">วัน/เดือน/ปีเกิด</label>
                     <input required type="date" value={formData.birthDate} onChange={e => setFormData({...formData, birthDate: e.target.value})} className="w-full p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-bold" />
                   </div>
                </div>
@@ -355,7 +311,6 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
           </div>
         </div>
 
-        {/* Section 2: Address */}
         <div className="bg-white p-8 rounded-[2rem] shadow-sm border space-y-4">
            <h3 className="text-lg font-black text-blue-900 border-b pb-2 flex items-center">
             <span className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center mr-3 text-sm italic">2</span>
@@ -363,7 +318,7 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
              <input placeholder="บ้านเลขที่" value={formData.address?.houseNo} onChange={e => setFormData({...formData, address: {...formData.address!, houseNo: e.target.value}})} className="p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-bold" />
-             <input placeholder="ชื่อหมู่บ้าน" value={formData.address?.village} onChange={e => setFormData({...formData, address: {...formData.address!, village: e.target.value}})} className="p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-bold" />
+             <input placeholder="หมู่บ้าน" value={formData.address?.village} onChange={e => setFormData({...formData, address: {...formData.address!, village: e.target.value}})} className="p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-bold" />
              <input placeholder="หมู่ที่" value={formData.address?.moo} onChange={e => setFormData({...formData, address: {...formData.address!, moo: e.target.value}})} className="p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-bold" />
              <div className="relative">
                 <input placeholder="ค้นหา ตำบล/อำเภอ" onChange={e => handleAddressSearch(e.target.value)} className="w-full p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-bold" />
@@ -378,10 +333,9 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
                 )}
              </div>
           </div>
-          <input readOnly value={formData.address?.subDistrict ? `ต.${formData.address.subDistrict} อ.${formData.address.district} จ.${formData.address.province} ${formData.address.zipCode}` : ''} className="w-full p-3 bg-slate-100 border-transparent rounded-xl text-slate-500 italic text-sm font-bold" placeholder="ระบบจะกรอกตำบล/อำเภอ/จังหวัดให้อัตโนมัติ" />
+          <input readOnly value={formData.address?.subDistrict ? `ต.${formData.address.subDistrict} อ.${formData.address.district} จ.${formData.address.province} ${formData.address.zipCode}` : ''} className="w-full p-3 bg-slate-100 border-transparent rounded-xl text-slate-500 italic text-sm font-bold" placeholder="ระบบจะกรอกข้อมูลให้อัตโนมัติ" />
         </div>
 
-        {/* Section 3: Education */}
         <div className="bg-white p-8 rounded-[2rem] shadow-sm border space-y-6">
           <h3 className="text-lg font-black text-blue-900 border-b pb-2 flex items-center">
             <span className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center mr-3 text-sm italic">3</span>
@@ -389,31 +343,37 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
           </h3>
 
           <div className="space-y-4">
-             <div className="flex flex-wrap gap-4 p-4 bg-slate-50 rounded-2xl">
-                {level === Level.M1 ? (
-                  <>
+             {/* แสดงประเภทนักเรียนเฉพาะ ม.4 เท่านั้น */}
+             {level === Level.M4 && (
+                <div className="flex flex-wrap gap-4 p-4 bg-slate-50 rounded-2xl">
                     <label className="flex items-center space-x-2 cursor-pointer">
-                       <input type="radio" checked={formData.education?.studentType === 'internal'} onChange={() => setFormData({...formData, education: {...formData.education!, studentType: 'internal'}})} />
-                       <span className="text-sm font-bold">กำลังเรียน ชั้น ป.6</span>
+                      <input type="radio" checked={formData.education?.studentType === 'internal'} onChange={() => setFormData({
+                        ...formData, 
+                        education: {
+                          ...formData.education!, 
+                          studentType: 'internal', 
+                          schoolName: 'โรงเรียนท่าบ่อ',
+                          schoolDistrict: 'ท่าบ่อ',
+                          schoolProvince: 'หนองคาย'
+                        }
+                      })} />
+                      <span className="text-sm font-bold">นักเรียน รร.เดิม (ท่าบ่อ)</span>
                     </label>
                     <label className="flex items-center space-x-2 cursor-pointer">
-                       <input type="radio" checked={formData.education?.studentType === 'external'} onChange={() => setFormData({...formData, education: {...formData.education!, studentType: 'external'}})} />
-                       <span className="text-sm font-bold">จบชั้น ป.6 แล้ว</span>
+                      <input type="radio" checked={formData.education?.studentType === 'external'} onChange={() => setFormData({
+                        ...formData, 
+                        education: {
+                          ...formData.education!, 
+                          studentType: 'external',
+                          schoolName: '',
+                          schoolDistrict: '',
+                          schoolProvince: ''
+                        }
+                      })} />
+                      <span className="text-sm font-bold">นักเรียนจาก รร.อื่น</span>
                     </label>
-                  </>
-                ) : (
-                  <>
-                    <label className="flex items-center space-x-2 cursor-pointer">
-                       <input type="radio" checked={formData.education?.studentType === 'internal'} onChange={() => setFormData({...formData, education: {...formData.education!, studentType: 'internal', schoolName: 'โรงเรียนท่าบ่อ'}})} />
-                       <span className="text-sm font-bold">นักเรียน รร.เดิม (ท่าบ่อ)</span>
-                    </label>
-                    <label className="flex items-center space-x-2 cursor-pointer">
-                       <input type="radio" checked={formData.education?.studentType === 'external'} onChange={() => setFormData({...formData, education: {...formData.education!, studentType: 'external'}})} />
-                       <span className="text-sm font-bold">นักเรียนจาก รร.อื่น</span>
-                    </label>
-                  </>
-                )}
-             </div>
+                </div>
+             )}
 
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <input required placeholder="ชื่อโรงเรียนเดิม" value={formData.education?.schoolName} onChange={e => setFormData({...formData, education: {...formData.education!, schoolName: e.target.value}})} className="p-3 bg-slate-50 border-2 border-transparent focus:border-blue-500 rounded-xl font-bold" />
@@ -425,7 +385,7 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
 
              <div className="p-6 bg-blue-50 rounded-2xl border-2 border-blue-100">
                 <label className="text-[10px] font-black text-blue-400 uppercase font-bold block mb-2">
-                   {level === Level.M1 ? 'ผลการเรียนเฉลี่ยรวม ป.4-ป.5 (GPAX)' : 'ผลการเรียนเฉลี่ยรวม 5 ภาคเรียน (GPAX)'}
+                   ผลการเรียนเฉลี่ยรวม (GPAX)
                 </label>
                 <input required type="number" step="0.01" value={formData.education?.gpa} onChange={e => setFormData({...formData, education: {...formData.education!, gpa: e.target.value}})} className="w-full p-4 bg-white border-2 border-transparent focus:border-blue-500 rounded-xl font-black text-3xl text-blue-600 shadow-sm" placeholder="0.00" />
              </div>
@@ -434,86 +394,65 @@ const AdmissionForm: React.FC<Props> = ({ level, settings, onCancel, onFinish })
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200 space-y-6">
             <h3 className="text-lg font-black text-blue-900 border-b pb-2 flex items-center">
               <span className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center mr-3 text-sm italic">3.1</span>
-              เลือกแผนการเรียน (Study Plan)
+              เลือกแผนการเรียน
             </h3>
 
-            {/* 1. Select Type */}
             <div className="grid grid-cols-2 gap-4">
-              <button
-                type="button"
-                onClick={() => handleTrackTypeChange('special')}
-                className={`p-4 rounded-2xl border-2 flex flex-col items-center justify-center transition-all ${formData.trackType === 'special' ? 'bg-purple-50 border-purple-500 text-purple-700 shadow-md scale-105' : 'bg-slate-50 border-slate-100 text-slate-400 hover:border-purple-200'}`}
-              >
+              <button type="button" onClick={() => setFormData({...formData, trackType: 'special', track: ''})} className={`p-4 rounded-2xl border-2 flex flex-col items-center justify-center transition-all ${formData.trackType === 'special' ? 'bg-purple-50 border-purple-500 text-purple-700 shadow-md scale-105' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>
                 <span className="text-2xl mb-1">💎</span>
                 <span className="font-black">ห้องเรียนพิเศษ</span>
-                <span className="text-[10px] opacity-70">Special Program</span>
               </button>
-
-              <button
-                type="button"
-                onClick={() => handleTrackTypeChange('regular')}
-                className={`p-4 rounded-2xl border-2 flex flex-col items-center justify-center transition-all ${formData.trackType === 'regular' ? 'bg-orange-50 border-orange-500 text-orange-700 shadow-md scale-105' : 'bg-slate-50 border-slate-100 text-slate-400 hover:border-orange-200'}`}
-              >
+              <button type="button" onClick={() => setFormData({...formData, trackType: 'regular', track: ''})} className={`p-4 rounded-2xl border-2 flex flex-col items-center justify-center transition-all ${formData.trackType === 'regular' ? 'bg-orange-50 border-orange-500 text-orange-700 shadow-md scale-105' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>
                 <span className="text-2xl mb-1">🎓</span>
                 <span className="font-black">ห้องเรียนปกติ</span>
-                <span className="text-[10px] opacity-70">Regular Program</span>
               </button>
             </div>
 
-            {/* 2. Select Track Dropdown */}
-            <div className="relative animate-fade-in">
-              <label className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-1 block">
-                 {formData.trackType === 'special' ? 'รายชื่อห้องเรียนพิเศษ' : 'รายชื่อห้องเรียนปกติ'}
-              </label>
-              <select 
-                value={formData.track} 
-                onChange={handleTrackChange}
-                className="w-full p-4 bg-slate-50 border-2 border-slate-200 focus:border-blue-500 rounded-2xl font-bold text-slate-700 outline-none appearance-none cursor-pointer hover:bg-white transition-colors"
-              >
+            <div className="relative">
+              <select value={formData.track} onChange={e => {
+                const trackName = e.target.value;
+                const trackObj = [...currentTracks.special, ...currentTracks.regular].find(t => t.name === trackName);
+                setFormData({
+                  ...formData, 
+                  track: trackName, 
+                  education: {...formData.education!, subGpaSubject: trackObj?.subGpaLabel || ''}
+                });
+              }} className="w-full p-4 bg-slate-50 border-2 border-slate-200 focus:border-blue-500 rounded-2xl font-bold text-slate-700 outline-none">
                 <option value="">-- กรุณาเลือกแผนการเรียน --</option>
                 {(formData.trackType === 'special' ? currentTracks.special : currentTracks.regular).map(t => (
                   <option key={t.id} value={t.name}>{t.name}</option>
                 ))}
               </select>
-              <div className="absolute right-4 top-10 pointer-events-none text-slate-400">
-                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-              </div>
             </div>
 
-            {/* 3. GPA Requirement */}
             {formData.education?.subGpaSubject && (
-                <div className="p-6 bg-yellow-50 rounded-2xl border-2 border-yellow-200 animate-slide-up">
-                   <div className="flex items-center mb-2 text-yellow-800">
-                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                      <span className="text-xs font-black uppercase">เกณฑ์คะแนนสะสมที่ใช้พิจารณา</span>
-                   </div>
+                <div className="p-6 bg-yellow-50 rounded-2xl border-2 border-yellow-200">
                    <label className="text-sm font-bold text-slate-700 block mb-2">{formData.education.subGpaSubject}</label>
-                   <input required type="number" step="0.01" value={formData.education.subGpa} onChange={e => setFormData({...formData, education: {...formData.education!, subGpa: e.target.value}})} className="w-full p-3 bg-white border-2 border-yellow-200 focus:border-yellow-500 rounded-xl font-black text-2xl text-yellow-700 shadow-sm placeholder:text-yellow-200/50" placeholder="0.00" />
+                   <input required type="number" step="0.01" value={formData.education.subGpa} onChange={e => setFormData({...formData, education: {...formData.education!, subGpa: e.target.value}})} className="w-full p-3 bg-white border-2 border-yellow-200 focus:yellow-500 rounded-xl font-black text-2xl text-yellow-700 shadow-sm" placeholder="0.00" />
                 </div>
             )}
           </div>
         </div>
 
-        {/* Section 4: Files */}
         <div className="bg-white p-8 rounded-[2rem] shadow-sm border space-y-6">
            <h3 className="text-lg font-black text-blue-900 border-b pb-2 flex items-center">
             <span className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center mr-3 text-sm italic">4</span>
             หลักฐานที่แนบมาพร้อมใบสมัคร
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-             {renderFileSlot('photo', 'รูปถ่ายชุดนักเรียน')}
-             {renderFileSlot('houseReg', 'สำเนาทะเบียนบ้าน')}
-             {renderFileSlot('idCard', 'สำเนาบัตรประชาชน')}
-             {renderFileSlot('transcript', 'ใบ ปพ.1 (ด้านหน้า)')}
-             {renderFileSlot('transcriptBack', 'ใบ ปพ.1 (ด้านหลัง)')}
+             {renderFileSlot('photo', 'รูปถ่าย')}
+             {renderFileSlot('houseReg', 'ทะเบียนบ้าน')}
+             {renderFileSlot('idCard', 'บัตรประชาชน')}
+             {renderFileSlot('transcript', 'ปพ.1 (หน้า)')}
+             {renderFileSlot('transcriptBack', 'ปพ.1 (หลัง)')}
           </div>
         </div>
 
         <div className="flex flex-col space-y-4 p-8 bg-slate-900 rounded-[3rem] shadow-2xl">
            <div className="flex justify-between items-center w-full">
-              <button type="button" onClick={onCancel} className="font-black text-slate-400 hover:text-white transition-colors">ย้อนกลับ</button>
-              <button type="submit" disabled={isSubmitting || showSuccessMessage} className={`px-16 py-5 rounded-[1.5rem] font-black text-white shadow-2xl transition-all active:scale-95 disabled:opacity-50 text-lg ${level === Level.M1 ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700'}`}>
-                 {isSubmitting ? 'กำลังส่งข้อมูล...' : 'ยืนยันการส่งใบสมัคร'}
+              <button type="button" onClick={onCancel} className="font-black text-slate-400 hover:text-white transition-colors">ยกเลิก</button>
+              <button type="submit" disabled={isSubmitting || showSuccessMessage || isCheckingDuplicate} className={`px-16 py-5 rounded-[1.5rem] font-black text-white shadow-2xl transition-all active:scale-95 disabled:opacity-50 text-lg ${level === Level.M1 ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700'}`}>
+                 {isSubmitting ? 'กำลังส่งข้อมูล...' : isCheckingDuplicate ? 'กำลังตรวจสอบ...' : (initialData ? 'บันทึกการแก้ไข' : 'ยืนยันการส่งใบสมัคร')}
               </button>
            </div>
         </div>
