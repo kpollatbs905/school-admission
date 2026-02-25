@@ -2,15 +2,18 @@
 import { ApplicationData, SystemSettings, Level, ApplicationStatus, FileUploadMode } from '../types';
 
 /**
- * GOOGLE APPS SCRIPT URL
+ * ⚠️ ขั้นตอนสำคัญ:
+ * 1. วางโค้ด V25.0 ใน Code.gs
+ * 2. Deploy -> New Deployment -> Anyone
  */
-const SCRIPT_URL: string = 'https://script.google.com/macros/s/AKfycbzQ0b7EHYO6JfgyCaSO5pMCqtxxTvf9IPAQdcQFAn853WriWBskM9jCLVM_RZGPWm7aRQ/exec';
+const STORAGE_KEY_SETTINGS = 'thabo_admission_settings_v15';
+const STORAGE_KEY_SCRIPT_URL = 'thabo_admission_script_url_v1';
 
-const STORAGE_KEY_APPS = 'thabo_admission_apps_v2';
-const STORAGE_KEY_SETTINGS = 'thabo_admission_settings_v2';
+const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby5EnKkxXyDYtWzWxv5yJ0nXjPaeuydPZG19s6KTn7BTHnibmJpmrNinKm5LBATMI74/exec';
 
 const DEFAULT_SETTINGS: SystemSettings = {
   schoolName: 'โรงเรียนท่าบ่อ',
+  admissionYear: (new Date().getFullYear() + 543).toString(),
   isOpen: true,
   startDate: '2024-01-01',
   endDate: '2025-12-31',
@@ -26,7 +29,13 @@ const DEFAULT_SETTINGS: SystemSettings = {
 };
 
 export const StorageService = {
-  getScriptUrl: () => SCRIPT_URL,
+  getScriptUrl: () => {
+    return localStorage.getItem(STORAGE_KEY_SCRIPT_URL) || DEFAULT_SCRIPT_URL;
+  },
+  
+  saveScriptUrl: (url: string) => {
+    localStorage.setItem(STORAGE_KEY_SCRIPT_URL, url);
+  },
   
   getSettings: (): SystemSettings => {
     try {
@@ -41,17 +50,7 @@ export const StorageService = {
     try {
       localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
     } catch (e) {
-      console.error("Failed to save settings to local storage", e);
-    }
-  },
-
-  getApplications: (): ApplicationData[] => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_APPS);
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      console.warn("Failed to read applications from local storage");
-      return [];
+      console.error("Settings save failed", e);
     }
   },
 
@@ -61,7 +60,6 @@ export const StorageService = {
       if (val.startsWith('data:image')) return 'UPLOADED';
       return val;
     };
-
     return {
       ...app,
       files: {
@@ -75,74 +73,50 @@ export const StorageService = {
     };
   },
 
-  saveApplication: (app: ApplicationData) => {
-    const apps = StorageService.getApplications();
-    const index = apps.findIndex(a => a.id === app.id);
-    const updatedApps = [...apps];
-    if (index > -1) {
-      updatedApps[index] = app;
-    } else {
-      updatedApps.push(app);
-    }
+  submitToCloud: async (data: ApplicationData): Promise<{ success: boolean; message?: string; photoUrl?: string }> => {
+    const scriptUrl = StorageService.getScriptUrl();
+    if (!scriptUrl) return { success: false, message: "URL ไม่ถูกต้อง" };
 
     try {
-      localStorage.setItem(STORAGE_KEY_APPS, JSON.stringify(updatedApps));
-    } catch (e) {
-      const strippedApps = updatedApps.map(item => StorageService.stripImages(item));
-      try {
-        localStorage.setItem(STORAGE_KEY_APPS, JSON.stringify(strippedApps));
-      } catch (innerError) {
-        console.error("LocalStorage critical failure");
+      const payload = JSON.stringify(data);
+      if (payload.length > 5.5 * 1024 * 1024) {
+        return { success: false, message: "ขนาดข้อมูลใหญ่เกินไป (รวมไม่ควรเกิน 5MB) กรุณาย่อขนาดรูปภาพ" };
       }
-    }
-  },
 
-  deleteApplication: (id: string) => {
-    try {
-      const apps = StorageService.getApplications();
-      const newApps = apps.filter(a => a.id !== id);
-      localStorage.setItem(STORAGE_KEY_APPS, JSON.stringify(newApps));
-    } catch (e) {
-      console.error("Failed to delete from local storage", e);
-    }
-  },
-
-  submitToCloud: async (data: ApplicationData): Promise<{success: boolean, message?: string}> => {
-    if (!SCRIPT_URL) return { success: false, message: 'Script URL Invalid' };
-
-    try {
-      // Use text/plain to avoid CORS preflight issues with GAS
-      await fetch(SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ ...data, action: 'update' }) 
+      const response = await fetch(scriptUrl, {
+        method: "POST",
+        mode: "cors",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: payload
       });
-      return { success: true };
+
+      const result = await response.json();
+      return result;
     } catch (error: any) {
-      return { success: false, message: 'Cloud Error: ' + error.message };
+      console.error("Cloud Error:", error);
+      return { success: false, message: "เกิดความล่าช้าในการส่งข้อมูล หรือไฟล์มีขนาดใหญ่เกินไป: " + error.message };
     }
   },
 
-  deleteFromCloud: async (id: string): Promise<{success: boolean, message?: string}> => {
-     try {
-      await fetch(SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ id, action: 'delete' }) 
-      });
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, message: 'Cloud Delete Error: ' + error.message };
+  getApplications: async (): Promise<ApplicationData[]> => {
+    const scriptUrl = StorageService.getScriptUrl();
+    if (!scriptUrl) throw new Error("Script URL is not configured");
+    try {
+      const response = await fetch(`${scriptUrl}?action=read&t=${Date.now()}`);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.json();
+      if (data.success === false) throw new Error(data.error || "Unknown server error");
+      return data;
+    } catch (e: any) {
+      console.error("Fetch Applications Error:", e);
+      throw e;
     }
   },
 
   getNextId: (level: Level): string => {
-    const apps = StorageService.getApplications().filter(a => a.level === level);
     const prefix = level === Level.M1 ? 'M1' : 'M4';
-    const currentYear = new Date().getFullYear() + 543;
-    const num = (apps.length + 1).toString().padStart(4, '0');
-    return `${prefix}-${currentYear}-${num}`;
+    const settings = StorageService.getSettings();
+    const num = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    return `${prefix}-${settings.admissionYear}-${num}`;
   }
 };
